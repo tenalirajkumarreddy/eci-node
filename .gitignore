@@ -1,0 +1,9 @@
+# The database password lives in .env - never commit it.
+.env
+node_modules/
+package-lock.json
+
+# Exports and local output
+*.csv
+out/
+*.log

@@ -1,0 +1,17 @@
+{
+  "name": "eci-node-collector",
+  "version": "1.0.0",
+  "description": "Node.js collector for the ECI old (2003/SIR) electoral roll. Multi-device fleet over one PostgreSQL, atomic part claiming, adaptive (uncapped) throughput.",
+  "type": "module",
+  "main": "index.js",
+  "engines": { "node": ">=18.17" },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "serve": "node index.js --serve",
+    "status": "node index.js --status"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
