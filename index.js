@@ -90,14 +90,17 @@ async function main() {
   const headless = !!args['headless'];
   let srv = null;
   if (!headless) {
-    const port = Number(args['port']) || 8008;
-    const host = String(args['host'] || '127.0.0.1');
+    // PaaS hosts (Render, Railway, Fly) inject $PORT and require a 0.0.0.0
+    // bind; a plain local run stays on 127.0.0.1 so the (unauthenticated)
+    // dashboard is never exposed to the LAN by accident.
+    const port = Number(args['port']) || Number(process.env.PORT) || 8008;
+    const host = String(args['host'] || process.env.HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1'));
     srv = createServer({ worker });
     await new Promise((resolve, reject) => {
       srv.once('error', reject);
       srv.listen(port, host, resolve);
     });
-    console.log(`dashboard → http://${host}:${port}/`);
+    console.log(`dashboard → http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}/ (bound ${host}:${port})`);
   }
 
   let shuttingDown = false;

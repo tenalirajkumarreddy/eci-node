@@ -64,6 +64,15 @@ const host = os.hostname();
 const DEFAULT_DSN =
   'postgresql://eci_app:Raj%40A2Nkufyg@129.225.75.85:5432/old_eci';
 
+// EPIC keys (tc/external). A copy committed next to this file wins, so a fresh
+// clone (and the Render deploy) has working --epic search; otherwise fall back
+// to the reverse-engineering checkout this project was built beside.
+function defaultAppKeysPath() {
+  const local = path.resolve(ROOT, 'app_keys.json');
+  if (fs.existsSync(local)) return local;
+  return path.resolve(ROOT, '..', 'eci rev eng', 'work', 'app_keys.json');
+}
+
 export const config = {
   // ---- store ----
   pgDsn: str(process.env.ECI_PG_DSN, DEFAULT_DSN),
@@ -113,10 +122,7 @@ export const config = {
 
   // ---- EPIC search (national display, ~1 req/s) ----
   epicMinIntervalMs: Math.max(0, num(process.env.ECI_EPIC_MIN_INTERVAL_MS, 1100)),
-  // The verified tc/external constants live with the reverse-engineering work;
-  // override with ECI_APP_KEYS to point at your own copy.
-  appKeysPath: str(
-    process.env.ECI_APP_KEYS,
-    path.resolve(ROOT, '..', 'eci rev eng', 'work', 'app_keys.json'),
-  ),
+  // Repo copy first, then the reverse-engineering checkout; override with
+  // ECI_APP_KEYS to point anywhere else.
+  appKeysPath: str(process.env.ECI_APP_KEYS, defaultAppKeysPath()),
 };

@@ -1,0 +1,37 @@
+# render.yaml — Render Blueprint for the Node collector.
+#
+# ONE web service runs the dashboard AND the sweep loop in one process
+# (index.js: worker.start() then srv.listen()). A background worker is not
+# needed: the dashboard is what Start/Stop talks to.
+#
+# PLAN is `free` below because that is the starting choice. Known costs:
+#   * Render spins a free web service down after ~15 min without inbound
+#     traffic, which kills a multi-hour sweep and the AIMD state with it.
+#   * Render reserves the right to suspend free services that make an
+#     uncommonly high volume of external requests — i.e. exactly this workload.
+# Switch this line to `plan: starter` (~$7/mo) when you want a 24/7 sweep.
+services:
+  - type: web
+    name: eci-node-collector
+    runtime: node
+    region: singapore          # closest Render region to India
+    plan: free
+    buildCommand: npm install
+    # index.js reads $PORT (Render injects it) and a set $PORT implies a
+    # 0.0.0.0 bind, but pass --host explicitly so the command is unambiguous.
+    startCommand: node index.js --host 0.0.0.0
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # The DSN is the only secret. `sync: false` means Render prompts for the
+      # value in the dashboard and never stores it in git.
+      - key: ECI_PG_DSN
+        sync: false
+      # MUST differ from the desktop tag (eci-node-desktop) and the phone tags:
+      # the tag owns the reservation queue and the 'auto_enabled@<tag>' setting.
+      - key: ECI_DEVICE_TAG
+        value: render-1
+      - key: ECI_PG_SCHEMA
+        value: public
+      - key: NODE_ENV
+        value: production

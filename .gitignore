@@ -1,5 +1,8 @@
 # The database password lives in .env - never commit it.
 .env
+
+# Tool/session scratch
+.freebuff/
 node_modules/
 package-lock.json
 
