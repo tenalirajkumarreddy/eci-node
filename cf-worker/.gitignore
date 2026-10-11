@@ -1,0 +1,4 @@
+node_modules/
+.wrangler/
+.agent-keys.json
+*.log

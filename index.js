@@ -8,6 +8,9 @@ import { config } from './config.js';
 import { EpicProcessor } from './epic.js';
 import { writeElectorsCsv } from './csv.js';
 import { setSetting } from './claim.js';
+import {
+  seedStates, seedAcs, discoverNext, discoverAc, acsBacklog,
+} from './catalog.js';
 import fs from 'node:fs';
 
 function parseArgs(argv) {
@@ -23,6 +26,22 @@ function parseArgs(argv) {
 }
 const args = parseArgs(process.argv.slice(2));
 const num = (v) => (v ? Number(v) || null : null);
+
+/** Catalogue jobs start in the background (they are also what the /admin page
+ * runs); a CLI caller wants the result, so wait for the job and echo progress. */
+async function waitJob(started) {
+  if (!started.started) throw new Error(started.reason);
+  const job = started.job;
+  let last = '';
+  for (;;) {
+    const line = JSON.stringify(job.progress || {});
+    if (line !== last) { console.log('  progress', line); last = line; }
+    if (job.done) break;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (job.error) throw new Error(job.error);
+  return job.result;
+}
 
 async function printStatus() {
   const { overall, devices } = await import('./claim.js').then((m) => m.summary());
@@ -62,6 +81,35 @@ async function main() {
     return;
   }
 
+  // ---- catalogue maintenance (same code the /admin buttons run) ----
+  if (args['seed-states'] || args['seed-acs'] || args['discover-next'] || args['discover']
+      || args['acs-backlog']) {
+    if (args['acs-backlog']) {
+      console.log(JSON.stringify(await acsBacklog({
+        state: typeof args['acs-backlog'] === 'string' ? args['acs-backlog'] : null,
+      }), null, 2));
+      await pool.end();
+      return;
+    }
+    const started = args['seed-states'] ? seedStates({ live: true })
+      : args['seed-acs'] ? seedAcs({
+          state: typeof args['seed-acs'] === 'string' ? args['seed-acs'] : null, live: true })
+      : args['discover-next'] ? discoverNext({
+          state: typeof args['discover-next'] === 'string' ? args['discover-next'] : null,
+          batch: num(args['batch']) || 1 })
+      : null;
+    if (started) {
+      const result = await waitJob(started);
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      const [sc, ac] = String(args['discover']).split('/');
+      if (!sc || !ac) throw new Error('usage: --discover S01/1  (state/AC)');
+      console.log(JSON.stringify(await discoverAc({ state_cd: sc, ac_no: Number(ac) }), null, 2));
+    }
+    await pool.end();
+    return;
+  }
+
   if (args['export']) {
     await new Promise((res, rej) => {
       const ws = fs.createWriteStream(String(args['export']));
@@ -82,12 +130,25 @@ async function main() {
     limits: { parts: num(args['parts']), minutes: num(args['minutes']), idleExit: num(args['idle-exit']) },
   });
   if (args['workers']) worker.aimd.limit = Math.max(1, Number(args['workers']));
-  // Stored as a real jsonb boolean, which is what the Python clients write and
-  // read for the 'auto_enabled@<tag>' knob.
-  await setSetting(config.deviceTag, 'auto_enabled', true);
-  await worker.start();
+  // Publish this device's health (and its egress IP) for the fleet view, even
+  // while paused: the panel must be able to see a stopped device too.
+  if (!args['no-heartbeat']) worker.startHeartbeat();
 
-  const headless = !!args['headless'];
+  // --no-collect: serve the catalog/fleet panel WITHOUT joining the sweep.
+  // Useful for a machine that should host the panel (or the mirror/export) but
+  // whose IP or CPU the fleet does not want: it never claims a part, never
+  // touches auto_enabled@<tag>, and looks exactly like a dormant device.
+  const collect = !args['no-collect'];
+  if (collect) {
+    // Stored as a real jsonb boolean, which is what the Python clients write and
+    // read for the 'auto_enabled@<tag>' knob.
+    await setSetting(config.deviceTag, 'auto_enabled', true);
+    await worker.start();
+  } else {
+    console.log('collecting disabled (--no-collect): serving the panel only');
+  }
+
+  const headless = !!args['headless'] && collect;
   let srv = null;
   if (!headless) {
     // PaaS hosts (Render, Railway, Fly) inject $PORT and require a 0.0.0.0
@@ -109,6 +170,7 @@ async function main() {
     shuttingDown = true;
     console.log('shutting down…');
     worker.stop();
+    try { await worker.stopHeartbeat(); } catch { /* last beat is best effort */ }
     try { await new Promise((res) => (srv ? srv.close(res) : res())); } catch { /* ignore */ }
     try { await pool.end(); } catch { /* ignore */ }
     process.exit(0);
@@ -129,6 +191,7 @@ async function main() {
       `write summary: ${writeState.flushed} rows committed in ${writeState.flushes} batches`
       + ` (${writeState.flush_errors} failed)${writeState.buffered ? `, ${writeState.buffered} still buffered` : ''}`,
       'node');
+    try { await worker.stopHeartbeat(); } catch { /* best effort */ }
     await pool.end();
     process.exit(0);
   }

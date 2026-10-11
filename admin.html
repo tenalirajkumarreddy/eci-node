@@ -1,0 +1,1198 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ECI catalog &amp; fleet</title>
+<style>
+ /* Same visual language as the device dashboard (server.js) so the two pages
+    read as one app: dark, dense, numbers first. */
+ :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--txt:#c9d1d9;--muted:#8b949e;
+       --blue:#58a6ff;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#1f6feb}
+ *{box-sizing:border-box}
+ body{font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:18px 22px 60px;background:var(--bg);color:var(--txt)}
+ a{color:var(--blue);text-decoration:none}
+ h1{font-size:17px;margin:0 0 2px} h1 .muted{font-weight:400;font-size:13px}
+ h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:22px 0 8px}
+ nav{display:flex;gap:6px;margin:14px 0 6px;flex-wrap:wrap}
+ nav button{background:#21262d;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 13px;font-size:13px;cursor:pointer}
+ nav button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+ button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:7px 13px;font-size:13px;cursor:pointer}
+ button.ghost{background:#21262d;border:1px solid var(--line);color:var(--txt)}
+ button:disabled{opacity:.45;cursor:default}
+ input,select{background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:13px}
+ .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+ .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+ .v{font-size:22px;font-weight:600;margin-top:2px}
+ .sub{font-size:11.5px;color:var(--muted);margin-top:3px}
+ .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .muted{color:var(--muted)}
+ .small{font-size:12px}
+ table{border-collapse:collapse;width:100%;font-size:12.5px}
+ th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;letter-spacing:.04em;
+    text-transform:uppercase;border-bottom:1px solid var(--line);padding:6px 8px;position:sticky;top:0;background:var(--card)}
+ td{border-bottom:1px solid #21262d;padding:5px 8px;vertical-align:top}
+ tr.click{cursor:pointer} tr.click:hover td{background:#1c2331}
+ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+ code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+ #joblog{font:12px/1.5 ui-monospace,Menlo,monospace;max-height:230px;overflow:auto;white-space:pre-wrap;color:var(--muted)}
+ .pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--line);white-space:nowrap}
+ .banner{border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12.5px;border:1px solid var(--line)}
+ .banner.warn{border-color:#5a4320;background:#2b2312;color:#e3b341}
+ .banner.ok{border-color:#204b28;background:#12261a;color:#57d977}
+ .banner.bad{border-color:#5c1f1a;background:#2b1413;color:#ff8b83}
+ #crumb{margin:8px 0 10px;font-size:13px}
+ .scroll{max-height:60vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+ .bar{height:6px;background:#21262d;border-radius:3px;overflow:hidden;margin-top:6px}
+ .bar i{display:block;height:100%;background:var(--acc)}
+</style></head><body>
+
+<h1>ECI catalog &amp; fleet <span class="muted" id="hdr">…</span>
+  <a href="/" style="float:right;font-size:12px">← device dashboard</a></h1>
+
+<nav>
+  <button data-tab="catalog" class="on">Catalog</button>
+  <button data-tab="parts">Parts &amp; collection</button>
+  <button data-tab="data">Data</button>
+  <button data-tab="epic">EPIC processor</button>
+  <button data-tab="logs">Logs</button>
+  <button data-tab="actions">Actions</button>
+  <button data-tab="fleet">Fleet health</button>
+  <button data-tab="db">Database</button>
+</nav>
+<div id="notice"></div>
+
+<!-- ------------------------------------------------- parts & collection -->
+<section id="tab-parts" hidden>
+  <div class="card">
+    <div class="k">Select area</div>
+    <div class="row" style="margin-top:8px">
+      <select id="pState"></select>
+      <select id="pAc"></select>
+      <input id="pFilter" placeholder="part no or name filter" style="width:190px">
+      <select id="pStatus">
+        <option value="">all statuses</option>
+        <option value="pending">pending</option>
+        <option value="done">done</option>
+        <option value="error">error</option>
+        <option value="running">running</option>
+      </select>
+      <button class="ghost" id="pLoad">Load</button>
+    </div>
+    <div class="small muted" id="pSummary" style="margin-top:8px"></div>
+  </div>
+
+  <h2>Seed parts for the selected AC</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="k">Probe — verified</div>
+      <div class="sub">Asks the gateway for every part number of this AC and writes only the ones that exist, then marks the AC discovered. The same probing the Python app did; a minute or two per AC.</div>
+      <div class="row" style="margin-top:10px"><button id="btnSeedProbe">Seed parts — probe</button></div>
+    </div>
+    <div class="card">
+      <div class="k">Manual range — instant, unverified</div>
+      <div class="sub">Writes the part numbers as pending for the fleet to sweep, without asking the gateway. Existing rows are never touched. A wrong number becomes a sweep that finds nothing.</div>
+      <div class="row" style="margin-top:10px">
+        <input id="seedFrom" type="number" min="1" value="1" style="width:78px">
+        <span class="small muted">to</span>
+        <input id="seedTo" type="number" min="1" style="width:88px">
+        <button class="ghost" id="btnSeedRange">Seed range</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>Collection</h2>
+  <div class="card">
+    <div class="row">
+      <button id="btnCollectAc">Collect this AC (auto queue)</button>
+      <label class="small muted"><input type="checkbox" id="collectForce"> force — re-open parts already done</label>
+      <span style="flex:1"></span>
+      <button class="ghost" id="btnRefreshCur">↻ Refresh current-roll parts</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnSweepAc">⚡ Sweep this AC now</button>
+      <label class="small muted">up to <input id="sweepParts" type="number" min="1" max="500" value="25" style="width:72px"> parts</label>
+      <button class="ghost" id="btnSweepStop">■ stop sweep</button>
+    </div>
+    <div class="small muted" style="margin-top:8px">
+      <b>Collect</b> puts the part(s) back in the shared queue — whichever device picks them up next sweeps them; a part another device is running right now is left alone.
+      <b>Sweep now</b> does the request here instead, over the same direct HTTP route the collector uses (<code>gateway-vha …/get-eroll-data-2003</code>), with the same claim and completion bookkeeping and with the same AIMD throttle.
+    </div>
+    <div class="small" style="margin-top:8px" id="sweepMsg"></div>
+  </div>
+
+  <h2>Old parts (2003 roll)</h2>
+  <div class="scroll"><table id="partsTable"></table></div>
+
+  <h2>Part detail</h2>
+  <div class="card" id="partDetail"><div class="small muted">Click a part row to see its rows, current-roll mapping and relation mix.</div></div>
+</section>
+
+<!-- ----------------------------------------------------------------- data -->
+<section id="tab-data" hidden>
+  <div class="card">
+    <div class="row">
+      <select id="dState"></select>
+      <select id="dAc"></select>
+      <input id="dPart" placeholder="old part" style="width:84px">
+      <input id="dCurPart" placeholder="current part" style="width:96px">
+      <input id="dEpic" placeholder="source id / EPIC (exact)" style="width:186px">
+      <input id="dName" placeholder="name prefix" style="width:160px">
+      <button class="ghost" id="dLoad">Search</button>
+      <label class="small muted"><input type="checkbox" id="dEpicsOnly" checked> EPIC-only export</label>
+      <span style="flex:1"></span>
+      <a id="dExport" href="/api/export.csv" target="_blank">export CSV</a>
+    </div>
+    <div class="small muted" style="margin-top:8px" id="dSummary"></div>
+  </div>
+  <div class="scroll"><table id="dTable"></table></div>
+
+  <h2>Relation types &amp; genders collected</h2>
+  <div class="small muted" id="bdNote"></div>
+  <div class="grid" style="margin-top:8px">
+    <div class="card"><div class="k">Relation type</div><div class="scroll"><table id="bdRel"></table></div></div>
+    <div class="card"><div class="k">Gender</div><div class="scroll"><table id="bdGen"></table></div></div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- epic processor -->
+<section id="tab-epic" hidden>
+  <div class="card">
+    <div class="k">EPIC processor</div>
+    <div class="row" style="margin-top:10px">
+      <input id="epicInput" placeholder="e.g. TBG0342345" style="width:220px;text-transform:uppercase">
+      <button id="epicGo">Look up</button>
+      <label class="small muted"><input type="checkbox" id="epicRefresh"> bypass cache</label>
+      <span class="small muted">the national display answers at about 1 req/s, so lookups queue</span>
+    </div>
+  </div>
+  <div class="card" id="epicResult"><div class="small muted">Look up an EPIC to see the current-roll record the national display returns for it.</div></div>
+  <h2>Recent lookups</h2>
+  <div class="scroll"><table id="epicTable"></table></div>
+</section>
+
+<!-- ------------------------------------------------------------------ logs -->
+<section id="tab-logs" hidden>
+  <h2>Jobs — the shared queue the Python/Android clients run</h2>
+  <div class="row">
+    <select id="jobStatus">
+      <option value="">all statuses</option>
+      <option value="queued">queued</option>
+      <option value="running">running</option>
+      <option value="done">done</option>
+      <option value="error">error</option>
+      <option value="cancelled">cancelled</option>
+    </select>
+    <button class="ghost" id="btnJobsRefresh">↻ Refresh</button>
+    <span class="small muted" id="jobsMsg"></span>
+  </div>
+  <div class="scroll" style="margin-top:8px"><table id="jobsTable"></table></div>
+  <h2>Events — every device</h2>
+  <div class="scroll"><table id="eventsTable"></table></div>
+</section>
+
+<section id="tab-catalog">
+  <div id="crumb"></div>
+  <div id="catalog" class="scroll"></div>
+  <div class="row" id="catalogfoot" style="margin-top:10px">
+    <button class="ghost" id="btnRefreshTop">↻ Refresh</button>
+    <span class="small muted" id="catalogmsg"></span>
+  </div>
+</section>
+
+<section id="tab-actions" hidden>
+  <div class="grid">
+    <div class="card">
+      <div class="k">1 · States</div>
+      <div class="sub">Legacy catalogue + the live state list, upserted. Nothing is deleted.</div>
+      <div class="row" style="margin-top:10px"><button id="btnSeedStates">Seed states</button></div>
+    </div>
+    <div class="card">
+      <div class="k">2 · Assembly constituencies</div>
+      <div class="sub">Legacy catalogue merged with the live AC list (the catalogue alone lists 175 for S01; the gateway serves 187).</div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnSeedAcsAll">Seed ACs — all states</button>
+        <button class="ghost" id="btnSeedAcsState">Only the selected state</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <select id="selStateActions"></select>
+      </div>
+    </div>
+    <div class="card">
+      <div class="k">3 · Old parts (discovery)</div>
+      <div class="sub">Probes part numbers upward until a whole 200-chunk is empty. This is what gives the fleet work to sweep.</div>
+      <div class="row" style="margin-top:10px">
+        <select id="selScope">
+          <option value="">all states</option>
+        </select>
+        <input id="inBatch" type="number" min="1" max="200" value="1" style="width:74px" title="how many ACs">
+        <button id="btnDiscover">Discover next</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="btnRetry">Requeue errored ACs</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>Discovery backlog</h2>
+  <div class="grid" id="backlog"></div>
+
+  <h2>Current job</h2>
+  <div class="card">
+    <div id="jobhead" class="small muted">idle — no catalogue job running in this instance</div>
+    <div class="bar"><i id="jobbar" style="width:0%"></i></div>
+    <div id="joblog"></div>
+  </div>
+  <div class="card">
+    <div class="k">Shared counters (this row is what every dashboard shows)</div>
+    <div class="small muted" id="statsline">…</div>
+  </div>
+</section>
+
+<section id="tab-fleet" hidden>
+  <div class="grid" id="fleetkpi"></div>
+  <div id="fleetwarn"></div>
+  <h2>Devices</h2>
+  <div class="scroll"><table id="devices"></table></div>
+  <h2>Egress IPs</h2>
+  <div id="egress"></div>
+  <h2>Work queue</h2>
+  <div class="grid" id="queue"></div>
+  <h2>Discovery backlog</h2>
+  <div class="grid" id="fleetbacklog"></div>
+</section>
+
+<section id="tab-db" hidden>
+  <div class="grid" id="dbkpi"></div>
+  <h2>Connections</h2>
+  <div class="scroll"><table id="dbconns"></table></div>
+  <h2>Running statements</h2>
+  <div class="scroll"><table id="dbactive"></table></div>
+  <h2>Tables</h2>
+  <div class="scroll"><table id="dbtables"></table></div>
+  <div class="row" style="margin-top:10px"><button class="ghost" id="btnDbRefresh">↻ Refresh</button></div>
+</section>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const nf = (n) => (n == null || n === '') ? '—' : Number(n).toLocaleString();
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function ago(iso){
+  if(!iso) return 'never';
+  const s = Math.round((Date.now()-Date.parse(iso))/1000);
+  if(!Number.isFinite(s)) return '—';
+  if(s<60) return s+'s ago';
+  if(s<3600) return Math.round(s/60)+'m ago';
+  if(s<86400) return (s/3600).toFixed(1)+'h ago';
+  return (s/86400).toFixed(1)+'d ago';
+}
+function dur(s){
+  if(s==null) return '—';
+  if(s<90) return s+'s';
+  if(s<5400) return (s/60).toFixed(1)+'m';
+  if(s<172800) return (s/3600).toFixed(1)+'h';
+  return (s/86400).toFixed(1)+'d';
+}
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = { error: text.slice(0,300) }; }
+  if(!r.ok) throw new Error((body && (body.error||body.message)) || ('HTTP '+r.status));
+  return body;
+}
+function post(path, body){
+  return api(path, { method:'POST', headers:{'content-type':'application/json'},
+                     body: JSON.stringify(body||{}) });
+}
+function notice(html, kind){
+  $('notice').innerHTML = html ? '<div class="banner '+(kind||'')+'">'+html+'</div>' : '';
+}
+
+/* ---------------------------------------------------------------- tabs */
+let tab = 'catalog';
+let poll = null;
+document.querySelectorAll('nav button').forEach((b) => {
+  b.onclick = () => {
+    tab = b.dataset.tab;
+    document.querySelectorAll('nav button').forEach((x)=>x.classList.toggle('on', x===b));
+    for (const t of ['catalog','parts','data','epic','logs','actions','fleet','db'])
+      $('tab-'+t).hidden = (t!==tab);
+    if(poll) clearInterval(poll);
+    if(tab==='fleet'){ tickFleet(); poll=setInterval(tickFleet, 5000); }
+    else if(tab==='db'){ tickDb(); poll=setInterval(tickDb, 15000); }
+    else if(tab==='actions'){ tickJob(); poll=setInterval(tickJob, 2000); }
+    else if(tab==='logs'){ tickJobs(); tickEvents(); poll=setInterval(()=>{ tickJobs(); tickEvents(); }, 5000); }
+    else if(tab==='parts'){ bootParts(); tickSweep(); }
+    else if(tab==='data'){ tickBreakdown(); }
+    else if(tab==='epic'){ loadEpics(); }
+  };
+});
+
+/* ------------------------------------------------------------ catalog */
+// Drilling down: states -> ACs -> parts -> electors. Depth is kept in one
+// object so Refresh and the breadcrumb both know where we are.
+const view = { level:'states', state:null, ac:null, part:null, search:'' };
+
+function crumb(){
+  const bits = ['<a href="#" data-nav="states">States</a>'];
+  if(view.state) bits.push('<a href="#" data-nav="acs">'+esc(view.state)+'</a>');
+  if(view.ac!=null) bits.push('<a href="#" data-nav="parts">AC '+esc(view.ac)+'</a>');
+  if(view.part!=null) bits.push('part '+esc(view.part));
+  $('crumb').innerHTML = bits.join(' <span class="muted">/</span> ');
+  document.querySelectorAll('#crumb a[data-nav]').forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); go(a.dataset.nav); };
+  });
+}
+function go(level){
+  view.level = level;
+  if(level==='states'){ view.state=null; view.ac=null; view.part=null; view.search=''; }
+  if(level==='acs'){ view.ac=null; view.part=null; view.search=''; }
+  if(level==='parts'){ view.part=null; view.search=''; }
+  renderCatalog();
+}
+function statusPill(st){
+  const cls = st==='done'?'ok':st==='error'?'bad':st==='running'?'warn':'muted';
+  return '<span class="pill '+cls+'">'+esc(st)+'</span>';
+}
+async function renderCatalog(){
+  crumb();
+  const box = $('catalog');
+  $('catalogmsg').textContent = 'loading…';
+  try {
+    if(view.level==='states'){
+      const rows = await api('/api/states');
+      box.innerHTML = '<table><thead><tr>'
+        + '<th>code</th><th>state</th><th class="num">ACs</th><th class="num">discovered</th>'
+        + '<th class="num">parts</th><th class="num">done</th><th class="num">pending</th>'
+        + '<th class="num">errors</th><th class="num">rows fetched</th><th>last finished</th>'
+        + '</tr></thead><tbody>'
+        + rows.map((r) => '<tr class="click" data-state="'+esc(r.state_cd)+'">'
+            + '<td><code>'+esc(r.state_cd)+'</code></td><td>'+esc(r.name||'')+'</td>'
+            + '<td class="num">'+nf(r.acs)+'</td><td class="num">'+nf(r.acs_discovered)+'</td>'
+            + '<td class="num">'+nf(r.parts)+'</td><td class="num ok">'+nf(r.done)+'</td>'
+            + '<td class="num">'+nf(r.pending)+'</td>'
+            + '<td class="num'+(r.errors?' bad':'')+'">'+nf(r.errors)+'</td>'
+            + '<td class="num">'+nf(r.records)+'</td><td class="small muted">'+ago(r.last_finished)+'</td>'
+          + '</tr>').join('')
+        + '</tbody></table>';
+      box.querySelectorAll('tr[data-state]').forEach((tr) => {
+        tr.onclick = () => { view.state = tr.dataset.state; go('acs'); };
+      });
+      $('catalogmsg').textContent = rows.length+' states';
+    }
+    else if(view.level==='acs'){
+      const rows = await api('/api/acs?state='+encodeURIComponent(view.state));
+      box.innerHTML = '<table><thead><tr>'
+        + '<th class="num">AC</th><th>name</th><th>local name</th><th>type</th><th>district</th>'
+        + '<th>discovery</th><th class="num">parts</th><th class="num">done</th>'
+        + '<th class="num">pending</th><th class="num">errors</th><th class="num">rows</th>'
+        + '<th>last finished</th><th></th></tr></thead><tbody>'
+        + rows.map((r) => '<tr class="click" data-ac="'+r.ac_no+'">'
+            + '<td class="num">'+r.ac_no+'</td><td>'+esc(r.name||'')+'</td>'
+            + '<td class="small">'+esc(r.name_l1||'')+'</td><td>'+esc(r.ac_type||'')+'</td>'
+            + '<td class="small muted">'+esc(r.district_cd||'')+'</td>'
+            + '<td>'+statusPill(r.discover_status)
+              + (r.maybe_truncated?' <span class="pill warn" title="old_parts_found == discover_max: probing may have stopped at the cap">truncated?</span>':'')
+              + (r.last_error?' <span class="pill bad" title="'+esc(r.last_error)+'">err</span>':'')+'</td>'
+            + '<td class="num">'+nf(r.parts)+'</td><td class="num ok">'+nf(r.done)+'</td>'
+            + '<td class="num">'+nf(r.pending)+'</td>'
+            + '<td class="num'+(r.errors?' bad':'')+'">'+nf(r.errors)+'</td>'
+            + '<td class="num">'+nf(r.records)+'</td>'
+            + '<td class="small muted">'+ago(r.last_finished)+'</td>'
+            + '<td><button class="ghost small" data-discover="'+r.ac_no+'" title="probe every part number of this AC and write the ones that exist">seed parts</button></td>'
+          + '</tr>').join('')
+        + '</tbody></table>';
+      box.querySelectorAll('tr[data-ac]').forEach((tr) => {
+        tr.onclick = (e) => {
+          if(e.target.dataset && e.target.dataset.discover) return;
+          view.ac = tr.dataset.ac; go('parts');
+        };
+      });
+      box.querySelectorAll('button[data-discover]').forEach((b) => {
+        b.onclick = async (e) => {
+          e.stopPropagation();
+          try {
+            await post('/api/catalog/discover', { state: view.state, ac: Number(b.dataset.discover) });
+            notice('Seeding parts for '+esc(view.state)+' AC '+esc(b.dataset.discover)
+              + ' — it probes every part number and writes the ones that exist. Progress is on the <b>Actions</b> tab.', 'ok');
+          } catch (err) { notice('Could not start discovery: '+esc(err.message), 'bad'); }
+        };
+      });
+      $('catalogmsg').textContent = rows.length+' ACs in '+view.state;
+    }
+    else if(view.level==='parts'){
+      const rows = await api('/api/parts?state='+encodeURIComponent(view.state)+'&ac='+encodeURIComponent(view.ac)+'&limit=2000');
+      box.innerHTML = '<table><thead><tr>'
+        + '<th class="num">part</th><th>name</th><th>status</th><th class="num">records</th>'
+        + '<th class="num">epics</th><th class="num">serial</th><th class="num">roll end</th>'
+        + '<th class="num">tries</th><th>claimed by</th><th>finished</th><th>note</th>'
+        + '</tr></thead><tbody>'
+        + rows.map((r) => '<tr class="click" data-part="'+r.part_no+'">'
+            + '<td class="num">'+r.part_no+'</td><td>'+esc(r.name||'')+'</td>'
+            + '<td>'+statusPill(r.status)+'</td>'
+            + '<td class="num">'+nf(r.records)+'</td><td class="num">'+nf(r.epics)+'</td>'
+            + '<td class="num">'+nf(r.last_serial)+'</td><td class="num">'+nf(r.roll_end)+'</td>'
+            + '<td class="num">'+nf(r.attempts)+'</td>'
+            + '<td class="small muted">'+esc(String(r.claimed_by||'').slice(0,28))+'</td>'
+            + '<td class="small muted">'+ago(r.finished_at||r.updated_at)+'</td>'
+            + '<td class="small'+(r.last_error?' bad':' muted')+'">'+esc(String(r.last_error||'').slice(0,60))+'</td>'
+          + '</tr>').join('')
+        + '</tbody></table>';
+      box.querySelectorAll('tr[data-part]').forEach((tr) => {
+        tr.onclick = () => { view.part = tr.dataset.part; go('electors'); };
+      });
+      $('catalogmsg').textContent = rows.length+' parts in AC '+view.ac;
+    }
+    else {
+      const qs = new URLSearchParams({ state:view.state, ac:view.ac, part:view.part, limit:'300' });
+      if(view.search) qs.set('q', view.search);
+      const res = await api('/api/electors?'+qs.toString());
+      const modeNote = res.mode==='id'
+        ? 'searched as an EPIC / source id (exact, indexed)'
+        : (res.mode==='name-prefix' ? 'searched as a name <b>prefix</b> — the index can only serve prefixes' : 'browse');
+      box.innerHTML = '<div class="row" style="padding:10px 2px">'
+        + '<input id="inSearch" placeholder="search this part: name prefix, or an EPIC / source id" value="'+esc(view.search)+'" style="min-width:340px">'
+        + '<button id="btnSearch">Search</button>'
+        + '<button class="ghost" id="btnClear">Clear</button>'
+        + '<span class="small muted">'+modeNote+'</span></div>'
+        + '<table><thead><tr><th>source id</th><th class="num">sl</th><th>name</th>'
+        + '<th>relative</th><th>rel</th><th>sex</th><th class="num">age</th><th>current EPIC</th>'
+        + '<th class="small">current part</th><th>last seen</th></tr></thead><tbody>'
+        + res.rows.map((r) => '<tr>'
+            + '<td><code>'+esc(r.source_id)+'</code></td><td class="num">'+nf(r.serial_no)+'</td>'
+            + '<td>'+esc(r.name||'')+'</td><td>'+esc(r.relative_name||'')+'</td>'
+            + '<td>'+esc(r.relation_type||'')+'</td><td>'+esc(r.gender||'')+'</td>'
+            + '<td class="num">'+nf(r.age)+'</td><td><code>'+esc(r.epic||'')+'</code></td>'
+            + '<td class="small muted">'+esc([r.cur_state_cd,r.cur_ac_no,r.cur_part_no].filter(v=>v!=null).join('/'))+'</td>'
+            + '<td class="small muted">'+ago(r.updated_at)+'</td>'
+          + '</tr>').join('')
+        + '</tbody></table>';
+      $('btnSearch').onclick = () => { view.search = $('inSearch').value.trim(); renderCatalog(); };
+      $('inSearch').onkeydown = (e) => { if(e.key==='Enter'){ view.search=$('inSearch').value.trim(); renderCatalog(); } };
+      $('btnClear').onclick = () => { view.search=''; renderCatalog(); };
+      $('catalogmsg').textContent = res.rows.length+' rows'+(view.search?' for "'+view.search+'"':'');
+    }
+  } catch (e) {
+    box.innerHTML = '<div class="banner bad">'+esc(e.message)+'</div>';
+    $('catalogmsg').textContent = 'failed';
+  }
+}
+$('btnRefreshTop').onclick = renderCatalog;
+
+/* ------------------------------------------------------------ actions */
+async function loadActionSelectors(){
+  const rows = await api('/api/states');
+  const opts = rows.filter((r)=>r.has_old_data||r.parts>0).map((r)=>
+    '<option value="'+esc(r.state_cd)+'">'+esc(r.state_cd)+' · '+esc(r.name||'')+'</option>').join('');
+  $('selStateActions').innerHTML = '<option value="">pick a state…</option>'+opts;
+  $('selScope').innerHTML = '<option value="">all states</option>'
+    + rows.map((r)=>'<option value="'+esc(r.state_cd)+'">'+esc(r.state_cd)+' · '+esc(r.name||'')+'</option>').join('');
+}
+function act(id, fn){
+  const b = $(id);
+  b.onclick = async () => {
+    b.disabled = true;
+    try { const r = await fn(); notice(esc(r && r.started ? 'Job started — progress below.' : 'Started.'), 'ok'); tab = 'actions'; tickJob(); }
+    catch (e) { notice('Failed: '+esc(e.message), 'bad'); }
+    finally { b.disabled = false; }
+  };
+}
+act('btnSeedStates', () => post('/api/catalog/seed-states'));
+act('btnSeedAcsAll', () => post('/api/catalog/seed-acs', {}));
+act('btnSeedAcsState', () => {
+  const st = $('selStateActions').value;
+  if(!st) return Promise.reject(new Error('pick a state first'));
+  return post('/api/catalog/seed-acs', { state: st });
+});
+act('btnDiscover', () => post('/api/catalog/discover-next', {
+  state: $('selScope').value || null, batch: Number($('inBatch').value)||1,
+}));
+act('btnRetry', () => post('/api/catalog/retry-errored', { state: $('selScope').value || null }));
+
+function backlogCards(rows){
+  const order = ['pending','running','done','error'];
+  const by = Object.fromEntries((rows||[]).map((r)=>[r.discover_status, r]));
+  const all = order.filter((s)=>by[s]).map((s)=>[s, by[s]]);
+  // Any status the order list does not name is still shown (a new state in the
+  // wild must never be silently dropped).
+  for (const r of (rows||[])) if(!order.includes(r.discover_status)) all.push([r.discover_status, r]);
+  const total = (rows||[]).reduce((a,r)=>a+r.acs,0);
+  return all.map(([s,r]) =>
+    '<div class="card"><div class="k">'+esc(s)+' ACs</div><div class="v">'+nf(r.acs)+'</div>'
+    + (r.maybe_truncated?'<div class="sub warn">'+nf(r.maybe_truncated)+' may be truncated</div>':'')
+    + '</div>').join('')
+    + '<div class="card"><div class="k">total ACs</div><div class="v">'+nf(total)+'</div>'
+    + '<div class="sub">of these, only <b>done</b> ones have all their parts in the sweep queue</div></div>';
+}
+async function tickJob(){
+  let j;
+  try { j = await api('/api/catalog/job'); }
+  catch (e) { $('jobhead').textContent = 'status unavailable: '+e.message; return; }
+  $('backlog').innerHTML = backlogCards(j.backlog);
+  const s = j.stats || {};
+  $('statsline').innerHTML = 'electors '+nf(s.electors)+' · unique EPICs '+nf(s.unique_epics)
+    + ' · computed '+ago(s.at)+' by '+esc(s.updated_by||'—')
+    + ' · '+(s.refreshing?'refreshing now':('ttl '+nf(s.ttl_secs)+'s, lease '+nf(s.lease_secs)+'s'))
+    + (s.this_instance_refreshes?'':' · <b>this instance never scans it</b>');
+  const run = j.job && j.job.running;
+  const last = j.job && j.job.last;
+  const job = run || last;
+  if(!job){ $('jobhead').textContent = 'idle — no catalogue job in this instance'; $('jobbar').style.width='0%'; $('joblog').textContent=''; return; }
+  const pr = job.progress || {};
+  const head = (run?'running':'last')+' · <b>'+esc(job.kind)+'</b>'
+    + (job.detail && Object.keys(job.detail).length ? ' '+esc(JSON.stringify(job.detail)) : '')
+    + ' · started '+ago(job.started_at)
+    + (job.done ? ' · finished '+ago(job.finished_at) : '');
+  $('jobhead').innerHTML = head;
+  if(job.result) $('jobhead').innerHTML += '<br><span class="ok">'+esc(JSON.stringify(job.result).slice(0,600))+'</span>';
+  if(job.error)  $('jobhead').innerHTML += '<br><span class="bad">'+esc(job.error)+'</span>';
+  const total = pr.batch || 1, done = pr.done || 0;
+  $('jobbar').style.width = Math.min(100, Math.round(100*done/Math.max(1,total)))+'%';
+  $('joblog').textContent = Object.entries(pr).map(([k,v])=>k+' = '+(typeof v==='object'?JSON.stringify(v):v)).join('\n')
+    + (job.done?'':'');
+}
+
+/* -------------------------------------------------------------- fleet */
+function tickFleet(){
+  api('/api/fleet').then((f) => {
+    const fl = f.fleet || {}, q = f.queue || {};
+    $('fleetkpi').innerHTML = [
+      ['Devices', nf(fl.devices), nf(fl.running)+' running · '+nf(fl.alive)+' reachable'],
+      ['Fleet speed', (fl.req_per_sec==null?'—':fl.req_per_sec)+' <span class="small muted">req/s</span>',
+        'sum of the devices\' own live windows'],
+      ['Parts/hour', nf(fl.parts_per_hour), nf(fl.parts_1h)+' in the last hour'],
+      ['Queue free', nf(q.free), nf(q.pending)+' pending + '+nf(q.errors)+' error − '+nf(q.reserved)+' reserved'],
+      ['ETA on discovered work', dur(q.eta_secs), nf(q.total)+' parts known'],
+      ['Egress IPs', nf((f.egress&&f.egress.groups||[]).length),
+        ((f.egress&&f.egress.shared||[]).length)+' shared by more than one device'],
+    ].map(([k,v,s])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div><div class="sub">'+s+'</div></div>').join('');
+
+    const warn = [];
+    const bp = fl.backpressure || [];
+    if(bp.length){
+      warn.push('<div class="banner bad"><b>The gateway is pushing back.</b> Errors seen since each device started: '
+        + bp.map((k)=>'HTTP '+esc(k)+' × '+nf(fl.error_mix[k])).join(', ')
+        + (fl.retry_afters?(' · '+nf(fl.retry_afters)+' Retry-After honoured'):'')
+        + '. This is the signal to stop adding devices.</div>');
+    } else if(fl.devices){
+      warn.push('<div class="banner ok"><b>No gateway backpressure.</b> No 429/5xx has been counted since any device started, '
+        + 'and the controllers\' limits have been free to climb — so the fleet is not at the gateway ceiling yet.</div>');
+    }
+    for(const g of (f.egress && f.egress.shared)||[]){
+      warn.push('<div class="banner warn"><b>'+g.count+' devices share the egress IP '+esc(g.ip)+'.</b> '
+        + esc(g.tags.join(', '))+' · the gateway limits per source IP, so these instances are competing for one ceiling. '
+        + 'Add capacity on a <b>different</b> IP (another host, a phone on mobile data, the database box) rather than another instance in the same region.</div>');
+    }
+    $('fleetwarn').innerHTML = warn.join('');
+
+    const dev = f.devices || [];
+    $('devices').innerHTML = '<thead><tr><th>device</th><th>engine</th><th>state</th>'
+      + '<th class="num">req/s</th><th class="num">limit</th><th class="num">peak</th>'
+      + '<th class="num">reqs</th><th class="num">errors</th><th>error mix</th>'
+      + '<th class="num">parts 1h</th><th class="num">parts 24h</th><th>current part</th>'
+      + '<th>egress</th><th>heartbeat</th></tr></thead><tbody>'
+      + dev.map((d) => {
+          const a = d.aimd || {};
+          const cls = d.state==='running'?'ok':d.state==='paused'?'warn':(d.state==='silent'?'bad':'muted');
+          return '<tr>'
+            + '<td><b>'+esc(d.tag)+'</b><div class="small muted">'+esc(d.worker_id||'')+'</div></td>'
+            + '<td class="small">'+esc(d.engine)+'</td>'
+            + '<td><span class="pill '+cls+'">'+esc(d.state)+'</span></td>'
+            + '<td class="num">'+(a.req_per_sec==null?'—':a.req_per_sec)+'</td>'
+            + '<td class="num">'+nf(a.limit)+'</td><td class="num">'+nf(a.peak)+'</td>'
+            + '<td class="num">'+nf(a.reqs)+'</td><td class="num">'+nf(a.err_reqs)+'</td>'
+            + '<td class="small">'+esc(Object.entries(a.err_by_status||{}).map(([k,v])=>k+'×'+v).join(' ')||'—')+'</td>'
+            + '<td class="num">'+nf(d.parts_1h)+'</td><td class="num">'+nf(d.parts_24h)+'</td>'
+            + '<td class="small">'+esc(d.current?[d.current.state_cd,d.current.ac_no,d.current.part_no].join('/')+(d.current.name?(' · '+d.current.name):''):'—')+'</td>'
+            + '<td class="small">'+esc(d.egress_ip||'—')+'</td>'
+            + '<td class="small muted">'+(d.heartbeat_age_secs==null?'no heartbeat':(d.heartbeat_age_secs+'s ago'))+'</td>'
+          + '</tr>';
+        }).join('') + '</tbody>';
+
+    $('egress').innerHTML = ((f.egress&&f.egress.groups)||[]).length
+      ? '<table><thead><tr><th>IP</th><th class="num">devices</th><th>who</th></tr></thead><tbody>'
+        + f.egress.groups.map((g)=>'<tr><td><code>'+esc(g.ip)+'</code></td><td class="num">'+g.count+'</td>'
+            + '<td class="small">'+esc(g.tags.join(', '))+'</td></tr>').join('')
+        + '</tbody></table>'
+      : '<div class="banner warn">No device has reported an egress IP yet — a device publishes it on its first heartbeat and then hourly. '
+        + 'Devices running an older build simply have none.</div>';
+
+    $('queue').innerHTML = [['done',q.done],['running',q.running],['pending',q.pending],['error',q.errors],['reserved (holds)',q.reserved],['free to pick',q.free]]
+      .map(([k,v])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+nf(v)+'</div></div>').join('');
+    $('fleetbacklog').innerHTML = backlogCards(f.discovery);
+    $('hdr').textContent = 'fleet of '+(f.devices||[]).length+' · '+(f.cached?'cached':'fresh');
+  }).catch((e) => { notice('Fleet view failed: '+esc(e.message), 'bad'); });
+}
+
+/* ----------------------------------------------------------- database */
+function tickDb(){
+  api('/api/db/health').then((h) => {
+    if(!h.connected){
+      $('dbkpi').innerHTML = '<div class="card"><div class="k">Database</div><div class="v bad">DOWN</div>'
+        + '<div class="sub">'+esc(h.error||'')+'</div></div>';
+      return;
+    }
+    const s = h.server || {};
+    $('dbkpi').innerHTML = [
+      ['Connection','<span class="ok">connected</span>', 'ping '+nf(h.ping_ms)+'ms · pool '+nf(h.pool_total)+' ('+nf(h.pool_idle)+' idle'+(h.pool_waiting?(', '+h.pool_waiting+' waiting'):'')+')'],
+      ['Server', esc(String(s.version||'').replace('PostgreSQL ','PG ')), 'up '+dur(s.uptime_secs)],
+      ['Database size', esc(s.db_size||'—'), 'work_mem '+esc(s.work_mem||'?')+' · shared_buffers '+esc(s.shared_buffers||'?')],
+      ['statement_timeout', esc(s.statement_timeout||'0'), s.statement_timeout==='0' ? 'no limit server-side — a runaway query runs to completion' : 'per statement'],
+      ['max_connections', nf(s.max_connections), nf((h.connections||[]).reduce((a,c)=>a+c.n,0))+' in use now'],
+      ['Last pool error', h.last_error?'<span class="bad">yes</span>':'<span class="ok">none</span>',
+        h.last_error?(esc(h.last_error.message)+' · '+ago(h.last_error.at)):'—'],
+    ].map(([k,v,sub])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div><div class="sub">'+sub+'</div></div>').join('');
+
+    $('dbconns').innerHTML = '<thead><tr><th>application</th><th>state</th><th class="num">count</th><th>oldest active</th></tr></thead><tbody>'
+      + (h.connections||[]).map((c)=>'<tr><td><code>'+esc(c.app)+'</code></td><td>'+esc(c.state)+'</td>'
+          + '<td class="num">'+c.n+'</td><td class="small muted">'+(c.oldest_active_secs==null?'—':dur(c.oldest_active_secs))+'</td></tr>').join('')
+      + '</tbody>';
+
+    $('dbactive').innerHTML = '<thead><tr><th class="num">pid</th><th>application</th><th>state</th>'
+      + '<th class="num">age</th><th>waiting on</th><th>query</th></tr></thead><tbody>'
+      + (h.active||[]).map((a)=>'<tr><td class="num">'+a.pid+'</td><td class="small">'+esc(String(a.app).slice(0,40))+'</td>'
+          + '<td>'+esc(a.state)+'</td><td class="num">'+dur(a.age_secs)+'</td>'
+          + '<td class="small muted">'+esc(a.wait||'—')+'</td>'
+          + '<td class="small"><code>'+esc(a.query)+'</code></td></tr>').join('')
+      + '</tbody>';
+
+    $('dbtables').innerHTML = '<thead><tr><th>table</th><th class="num">size</th><th class="num">est. rows</th><th>last autovacuum</th></tr></thead><tbody>'
+      + (h.tables||[]).map((t)=>'<tr><td><code>'+esc(t.name)+'</code></td><td class="num">'+esc(t.size)+'</td>'
+          + '<td class="num">'+nf(t.est_rows)+'</td><td class="small muted">'+ago(t.last_autovacuum)+'</td></tr>').join('')
+      + '</tbody>';
+    $('hdr').textContent = (h.cached?'cached':'fresh') + ' · ping '+nf(h.ping_ms)+'ms';
+  }).catch((e) => { notice('Database view failed: '+esc(e.message), 'bad'); });
+}
+$('btnDbRefresh').onclick = tickDb;
+
+/* ==================================================================== parts
+ * The Python app's "Parts & collection" tab, on the same tables. Every action
+ * here is a Node route (collection.js); nothing shells out to Python.
+ * ==================================================================== */
+const parts = { state:null, ac:null, status:'', q:'', rows:[], curParts:[] };
+
+async function loadAcSelect(selId, state, blank){
+  const el = $(selId);
+  const keep = el.value;
+  if(!state){ el.innerHTML = '<option value="">'+esc(blank)+'</option>'; return; }
+  el.innerHTML = '<option value="">loading…</option>';
+  try {
+    const rows = await api('/api/acs?state='+encodeURIComponent(state));
+    el.innerHTML = '<option value="">'+esc(blank)+'</option>'
+      + rows.map((r)=>'<option value="'+r.ac_no+'"'+(String(r.ac_no)===String(keep)?' selected':'')+'>'
+          + r.ac_no+' · '+esc(r.name||'')+' — '+nf(r.parts)+' parts</option>').join('');
+  } catch(e){
+    el.innerHTML = '<option value="">'+esc(blank)+'</option>';
+  }
+}
+
+async function loadCurrentParts(refresh){
+  if(!parts.state || !parts.ac){ parts.curParts = []; return null; }
+  const qs = new URLSearchParams({ state:parts.state, ac:parts.ac });
+  if(refresh) qs.set('refresh','1');
+  try {
+    const r = await api('/api/current_parts?'+qs.toString());
+    parts.curParts = r.rows || [];
+    return r;
+  } catch(e){ parts.curParts = []; return null; }
+}
+
+async function loadParts(){
+  if(!parts.state || !parts.ac){
+    $('pSummary').textContent = 'pick a state and an AC first';
+    $('partsTable').innerHTML = ''; return;
+  }
+  $('pSummary').textContent = 'loading…';
+  const qs = new URLSearchParams({ state:parts.state, ac:parts.ac, limit:'2000' });
+  if(parts.status) qs.set('status', parts.status);
+  if(parts.q) qs.set('q', parts.q);
+  let rows;
+  try { rows = await api('/api/parts?'+qs.toString()); }
+  catch(e){ $('pSummary').innerHTML = '<span class="bad">'+esc(e.message)+'</span>'; return; }
+  parts.rows = rows;
+  const by = rows.reduce((a,r)=>{ a[r.status]=(a[r.status]||0)+1; return a; },{});
+  $('pSummary').innerHTML = '<b>'+nf(rows.length)+'</b> part(s) · '
+    + ['done','pending','running','error'].filter((s)=>by[s]).map((s)=>nf(by[s])+' '+s).join(' · ')
+    + ' · '+nf(rows.reduce((a,r)=>a+(r.records||0),0))+' rows fetched here'
+    + ' · '+nf(parts.curParts.length)+' current-roll name(s) cached';
+  $('partsTable').innerHTML = '<thead><tr><th class="num">part</th><th>name</th><th>status</th>'
+    + '<th class="num">records</th><th class="num">epics</th><th class="num">last serial</th>'
+    + '<th class="num">roll end</th><th class="num">tries</th><th>claimed by</th><th>finished</th>'
+    + '<th>note</th><th></th></tr></thead><tbody>'
+    + rows.map((r)=>'<tr class="click" data-part="'+r.part_no+'">'
+        + '<td class="num">'+r.part_no+'</td><td>'+esc(r.name||'')+'</td>'
+        + '<td>'+statusPill(r.status)+'</td>'
+        + '<td class="num">'+nf(r.records)+'</td><td class="num">'+nf(r.epics)+'</td>'
+        + '<td class="num">'+nf(r.last_serial)+'</td><td class="num">'+nf(r.roll_end)+'</td>'
+        + '<td class="num">'+nf(r.attempts)+'</td>'
+        + '<td class="small muted">'+esc(String(r.claimed_by||'').slice(0,24))+'</td>'
+        + '<td class="small muted">'+ago(r.finished_at||r.updated_at)+'</td>'
+        + '<td class="small'+(r.last_error?' bad':' muted')+'">'+esc(String(r.last_error||'').slice(0,44))+'</td>'
+        + '<td><button class="ghost small" data-collect="'+r.part_no+'">'
+          + (r.status==='done'?'re-collect':'collect')+'</button></td>'
+      + '</tr>').join('')
+    + '</tbody>';
+  $('partsTable').querySelectorAll('tr[data-part]').forEach((tr)=>{
+    tr.onclick = (e)=>{
+      if(e.target.dataset && e.target.dataset.collect) return;
+      showPart(tr.dataset.part);
+    };
+  });
+  $('partsTable').querySelectorAll('button[data-collect]').forEach((b)=>{
+    b.onclick = async (e)=>{ e.stopPropagation(); await doCollect(b.dataset.collect); };
+  });
+}
+
+async function doCollect(part){
+  try {
+    const r = await post('/api/collect', {
+      state: parts.state, ac: parts.ac, part: Number(part), force: $('collectForce').checked,
+    });
+    if(!r.queued){
+      // Honest refusal: the part is running on another device, or already done and
+      // force is off. Never silently pretend it was queued.
+      notice('Part '+esc(part)+' was not queued — '+esc(r.reason || 'no reason given')+'.', 'warn');
+    } else {
+      notice('Part '+esc(part)+' is queued. The next device to pick it up sweeps it.', 'ok');
+    }
+    await loadParts();
+  } catch(e){ notice('Collect failed: '+esc(e.message), 'bad'); }
+}
+
+async function showPart(part){
+  $('partDetail').innerHTML = '<div class="small muted">loading part '+esc(part)+'…</div>';
+  try {
+    const d = await api('/api/part?state='+encodeURIComponent(parts.state)
+      +'&ac='+encodeURIComponent(parts.ac)+'&part='+encodeURIComponent(part));
+    const p = d.part;
+    const kv = [
+      ['status', statusPill(p.status)],
+      ['name', esc(p.name||'—')],
+      ['maps to current-roll part', esc(String(p.cur_part_mode ?? '—'))
+        + (p.cur_part_name ? ' · '+esc(p.cur_part_name) : '')],
+      ['records', nf(p.records)], ['epics', nf(p.epics)], ['unmapped', nf(p.unmapped)],
+      ['last serial', nf(p.last_serial)], ['roll end', nf(p.roll_end)], ['attempts', nf(p.attempts)],
+      ['started', ago(p.started_at)], ['finished', ago(p.finished_at)],
+      ['last error', p.last_error ? '<span class="bad">'+esc(p.last_error)+'</span>' : '—'],
+    ];
+    $('partDetail').innerHTML =
+        '<div class="row"><b>Part '+p.part_no+'</b>'
+      + '<button id="btnCollectOne">'+(p.status==='done'?'re-collect this part':'collect this part')+'</button>'
+      + '<button class="ghost" id="btnSweepPart">⚡ Sweep now (this device)</button>'
+      + '<span class="small muted">'+esc(parts.state)+' AC '+esc(parts.ac)+'</span></div>'
+      + '<div class="grid" style="margin-top:10px">'
+      + kv.map(([k,v])=>'<div><div class="k">'+k+'</div><div class="small">'+v+'</div></div>').join('')
+      + '</div>'
+      + '<h2>Where these people sit on the current roll</h2>'
+      + (d.by_current_part.length
+          ? '<table><thead><tr><th>current state</th><th class="num">AC</th><th class="num">part</th>'
+            + '<th class="num">rows</th><th class="num">EPICs</th></tr></thead><tbody>'
+            + d.by_current_part.map((r)=>'<tr><td>'+esc(r.cur_state_cd||'—')+'</td>'
+                +'<td class="num">'+nf(r.cur_ac_no)+'</td><td class="num">'+nf(r.cur_part_no)+'</td>'
+                +'<td class="num">'+nf(r.n)+'</td><td class="num">'+nf(r.epics)+'</td></tr>').join('')
+            + '</tbody></table>'
+          : '<div class="small muted">no rows harvested for this part yet</div>')
+      + '<h2>Relation types in this part</h2>'
+      + (d.by_relation.length
+          ? '<table><thead><tr><th>code</th><th>label</th><th class="num">rows</th>'
+            + '<th class="num">mapped to an EPIC</th></tr></thead><tbody>'
+            + d.by_relation.map((r)=>'<tr><td><code>'+esc(r.relation_type||'')+'</code></td>'
+                +'<td>'+esc(r.label||'')+'</td><td class="num">'+nf(r.n)+'</td>'
+                +'<td class="num">'+nf(r.mapped)+'</td></tr>').join('')+'</tbody></table>'
+          : '<div class="small muted">no rows yet</div>')
+      + '<h2>First rows</h2>'
+      + '<div class="scroll"><table><thead><tr><th class="num">sl</th><th>name</th><th>relative</th>'
+      + '<th>rel</th><th>sex</th><th class="num">age</th><th>EPIC 2003</th><th>current EPIC</th>'
+      + '<th>cur AC/part</th></tr></thead><tbody>'
+      + d.sample.map((r)=>'<tr><td class="num">'+nf(r.serial_no)+'</td><td>'+esc(r.full_name||'')+'</td>'
+          +'<td>'+esc(r.relative_name||'')+'</td>'
+          +'<td>'+esc(r.relation_label||r.relation_type||'')+'</td>'
+          +'<td>'+esc(r.gender_label||r.gender||'')+'</td><td class="num">'+nf(r.age_snapshot)+'</td>'
+          +'<td><code>'+esc(r.epic_2003||'')+'</code></td><td><code>'+esc(r.cur_epic||'')+'</code></td>'
+          +'<td class="small muted">'+esc([r.cur_ac_no,r.cur_part_no].filter((v)=>v!=null).join('/'))+'</td>'
+        +'</tr>').join('')
+      + '</tbody></table></div>';
+    // The two halves of the same intent: queue it for the fleet, or do the
+    // requests here and now over direct HTTP.
+    $('btnCollectOne').onclick = ()=>doCollect(p.part_no);
+    const sweepBtn = document.getElementById('btnSweepPart');
+    if(sweepBtn){
+      sweepBtn.onclick = async () => {
+        sweepBtn.disabled = true;
+        try {
+          const r = await post('/api/sweep', {
+            state: parts.state, ac: parts.ac, part: Number(p.part_no),
+            force: $('collectForce').checked,
+          });
+          if(!r.started){ notice('Sweep not started — '+esc(r.reason||'no reason given'), 'warn'); return; }
+          notice('Sweeping part '+p.part_no+' here, over direct HTTP. This takes 5–60s; progress below.', 'ok');
+          watchSweep();
+        } catch(e){ notice('Sweep failed: '+esc(e.message), 'bad'); }
+        finally { sweepBtn.disabled = false; }
+      };
+    }
+  } catch(e){
+    $('partDetail').innerHTML = '<div class="banner bad">'+esc(e.message)+'</div>';
+  }
+}
+
+async function bootParts(){
+  if(!$('pState').options.length){
+    const rows = await api('/api/states').catch(()=>[]);
+    $('pState').innerHTML = '<option value="">pick a state…</option>'
+      + rows.map((r)=>'<option value="'+esc(r.state_cd)+'">'+esc(r.state_cd)+' · '
+          + esc(r.name||'')+' — '+nf(r.parts)+' parts</option>').join('');
+  }
+  if(parts.state && parts.ac && !parts.rows.length) await loadParts();
+}
+
+$('pState').onchange = async () => {
+  parts.state = $('pState').value || null;
+  parts.ac = null; parts.rows = []; parts.curParts = [];
+  $('pAc').innerHTML = '<option value="">pick an AC…</option>';
+  await loadAcSelect('pAc', parts.state, 'pick an AC…');
+  $('pSummary').textContent = parts.state ? 'pick an AC' : 'pick a state';
+};
+$('pAc').onchange = async () => {
+  parts.ac = $('pAc').value || null;
+  await loadCurrentParts(false);
+  loadParts();
+};
+$('pLoad').onclick = () => { parts.status = $('pStatus').value; parts.q = $('pFilter').value.trim(); loadParts(); };
+$('pFilter').onkeydown = (e) => { if(e.key==='Enter') $('pLoad').click(); };
+
+$('btnSeedProbe').onclick = async () => {
+  const b = $('btnSeedProbe');
+  if(!parts.state || !parts.ac) return notice('Pick a state and an AC first.', 'warn');
+  b.disabled = true;
+  try {
+    const r = await post('/api/parts/seed', { state:parts.state, ac:parts.ac, mode:'probe' });
+    notice('Probing every part number of '+esc(parts.state)+' AC '+esc(parts.ac)+' — '
+      + 'the probe can take a minute or two per AC. Progress is on the <b>Actions</b> tab; '
+      + 'the parts appear here as they are written.', 'ok');
+  } catch(e){ notice('Seed failed: '+esc(e.message), 'bad'); }
+  finally { b.disabled = false; }
+};
+
+$('btnSeedRange').onclick = async () => {
+  if(!parts.state || !parts.ac) return notice('Pick a state and an AC first.', 'warn');
+  const from = $('seedFrom').value, to = $('seedTo').value;
+  const body = { state:parts.state, ac:parts.ac, mode:'manual',
+                 from: from === '' ? null : Number(from), to: to === '' ? null : Number(to) };
+  try {
+    const r = await post('/api/parts/seed', body);
+    notice('Seeded '+nf(r.inserted)+' new part(s), '+nf(r.existing)+' were already known. '
+      + '<b>Unverified</b>: nothing was probed, so a wrong number becomes a sweep that finds nothing.',
+      'warn');
+    loadParts();
+  } catch(e){ notice('Seed failed: '+esc(e.message), 'bad'); }
+};
+
+$('btnCollectAc').onclick = async () => {
+  if(!parts.state || !parts.ac) return notice('Pick a state and an AC first.', 'warn');
+  try {
+    const r = await post('/api/collect_auto', {
+      state:parts.state, ac:parts.ac, force: $('collectForce').checked,
+    });
+    notice('Queued '+nf(r.queued)+' part(s) of '+esc(parts.state)+' AC '+esc(parts.ac)+'.'
+      + (r.held_running ? ' '+nf(r.held_running)+' left running on another device.' : '')
+      + (r.done_skipped ? ' '+nf(r.done_skipped)+' already done — tick <b>force</b> to re-collect those.' : '')
+      + (r.hint ? ' <span class="warn">'+esc(r.hint)+'</span>' : ''), 'ok');
+    loadParts();
+  } catch(e){ notice('Collect failed: '+esc(e.message), 'bad'); }
+};
+
+async function tickSweep(){
+  try {
+    const s = await api('/api/sweep');
+    const run = s.running || s.last;
+    if(!run){ $('sweepMsg').textContent = 'no one-off sweep has run in this instance'; return null; }
+    const cur = run.current ? [run.current.state_cd, run.current.ac_no, run.current.part_no].join('/') : null;
+    $('sweepMsg').innerHTML = '<b>'+(s.running ? 'sweeping now' : 'last sweep')+'</b> — '+esc(run.scope_label)
+      + ' · swept '+nf(run.done)+(run.max_parts>1?('/'+nf(run.max_parts)):'')
+      + (run.errors ? ' · <span class="bad">'+nf(run.errors)+' error(s)</span>' : '')
+      + ' · '+nf(run.records)+' rows, '+nf(run.epics)+' epics'
+      + (cur ? ' · on <code>'+esc(cur)+'</code>' : '')
+      + (run.finished_at ? ' · finished '+ago(run.finished_at)+' in '+nf(run.seconds)+'s' : '')
+      + (run.result && run.result.reason ? ' · '+esc(run.result.reason) : '')
+      + (run.error ? ' · <span class="bad">'+esc(run.error)+'</span>' : '');
+    return s;
+  } catch(e){
+    $('sweepMsg').textContent = 'sweep status unavailable: '+e.message;
+    return null;
+  }
+}
+
+let sweepPoll = null;
+function watchSweep(){
+  if(sweepPoll) clearInterval(sweepPoll);
+  tickSweep();
+  sweepPoll = setInterval(async () => {
+    const s = await tickSweep();
+    if(!s || !s.running){
+      clearInterval(sweepPoll); sweepPoll = null;
+      await loadCurrentParts(false);
+      loadParts();
+    }
+  }, 4000);
+}
+
+$('btnSweepAc').onclick = async () => {
+  const b = $('btnSweepAc');
+  if(!parts.state || !parts.ac) return notice('Pick a state and an AC first.', 'warn');
+  b.disabled = true;
+  try {
+    const r = await post('/api/sweep', {
+      state:parts.state, ac:parts.ac, force:$('collectForce').checked,
+      parts: Number($('sweepParts').value) || 25,
+    });
+    if(!r.started){ notice('Sweep not started — '+esc(r.reason||'no reason given'), 'warn'); return; }
+    notice('Sweeping '+esc(parts.state)+' AC '+esc(parts.ac)+' here, part by part, over direct HTTP — '
+      + 'up to '+nf(r.run.max_parts)+' part(s) or '+nf(r.run.max_minutes)+' minutes.', 'ok');
+    watchSweep();
+  } catch(e){ notice('Sweep failed: '+esc(e.message), 'bad'); }
+  finally { b.disabled = false; }
+};
+
+$('btnSweepStop').onclick = async () => {
+  try {
+    const r = await post('/api/sweep/stop');
+    notice(r.stopped ? 'Stopping after the part being swept now ('+esc(r.scope)+').'
+      : esc(r.reason||'nothing to stop'), r.stopped ? 'ok' : 'warn');
+    tickSweep();
+  } catch(e){ notice('Stop failed: '+esc(e.message), 'bad'); }
+};
+
+$('btnRefreshCur').onclick = async () => {
+  const b = $('btnRefreshCur');
+  if(!parts.state || !parts.ac) return notice('Pick a state and an AC first.', 'warn');
+  b.disabled = true;
+  try {
+    const r = await loadCurrentParts(true);
+    notice('Current-roll parts for '+esc(parts.state)+' AC '+esc(parts.ac)+': '
+      + nf(r ? r.fetched : 0)+' row(s) from the gateway'
+      + (r && r.cached ? ' · '+nf(r.cached)+' already cached' : '')
+      + (r && r.error ? ' · <span class="bad">'+esc(r.error)+'</span>' : ''),
+      r && r.error ? 'warn' : 'ok');
+    loadParts();
+  } finally { b.disabled = false; }
+};
+
+/* ==================================================================== data */
+
+function dFilters(){
+  const qs = new URLSearchParams();
+  for (const [k,id] of [['state','dState'],['ac','dAc'],['part','dPart'],['cur_part','dCurPart']]){
+    const v = $(id).value;
+    if(v) qs.set(k, v);
+  }
+  const text = $('dEpic').value.trim() || $('dName').value.trim();
+  if(text) qs.set('q', text);
+  return qs;
+}
+
+async function loadElectors(){
+  const qs = dFilters();
+  const exportQs = new URLSearchParams(qs);
+  exportQs.set('epics_only', $('dEpicsOnly').checked ? '1' : '0');
+  $('dExport').href = '/api/export.csv?'+exportQs.toString();
+  const page = new URLSearchParams(qs); page.set('limit','300');
+  $('dSummary').textContent = 'loading…';
+  try {
+    const res = await api('/api/electors?'+page.toString());
+    const mode = res.mode === 'id'
+      ? 'searched as a source id / EPIC (exact, indexed)'
+      : (res.mode === 'name-prefix'
+          ? 'searched as a name <b>prefix</b> — the index can only serve prefixes, a “contains” search would scan the whole electors table'
+          : 'browsing');
+    $('dSummary').innerHTML = nf(res.rows.length)+' row(s) shown · '+mode;
+    $('dTable').innerHTML = '<thead><tr><th>source id</th><th class="num">sl</th><th>name</th>'
+      + '<th>relative</th><th>rel</th><th>sex</th><th class="num">age</th><th>EPIC 2003</th>'
+      + '<th>current EPIC</th><th>cur AC/part</th><th>last seen</th></tr></thead><tbody>'
+      + res.rows.map((r)=>'<tr><td><code>'+esc(r.source_id)+'</code></td>'
+          +'<td class="num">'+nf(r.serial_no)+'</td><td>'+esc(r.name||'')+'</td>'
+          +'<td>'+esc(r.relative_name||'')+'</td><td>'+esc(r.relation_type||'')+'</td>'
+          +'<td>'+esc(r.gender||'')+'</td><td class="num">'+nf(r.age)+'</td>'
+          +'<td><code>'+esc(r.epic_2003||'')+'</code></td>'
+          +'<td><code>'+esc(r.epic||'')+'</code></td>'
+          +'<td class="small muted">'+esc([r.cur_state_cd,r.cur_ac_no,r.cur_part_no].filter((v)=>v!=null).join('/'))+'</td>'
+          +'<td class="small muted">'+ago(r.updated_at)+'</td></tr>').join('')
+      + '</tbody>';
+  } catch(e){
+    $('dSummary').innerHTML = '<span class="bad">'+esc(e.message)+'</span>';
+    $('dTable').innerHTML = '';
+  }
+}
+
+async function tickBreakdown(){
+  const qs = new URLSearchParams();
+  if($('dState').value) qs.set('state', $('dState').value);
+  if($('dAc').value) qs.set('ac', $('dAc').value);
+  $('bdNote').textContent = 'loading…';
+  try {
+    const b = await api('/api/breakdown?'+qs.toString());
+    const cov = b.coverage || {};
+    $('bdNote').innerHTML = (b.error
+        ? '<span class="bad">'+esc(b.error)+'</span> — showing the last value computed'
+        : 'computed '+nf(b.cached_secs)+'s ago, cached for '+nf(b.ttl_secs)+'s')
+      + (qs.toString() ? ' · scoped to '+esc(qs.toString().replace(/&/g,' ')) : ' · whole table')
+      + ' · <b>'+nf(cov.total)+'</b> rows, '+nf(cov.with_epic)+' with a current EPIC, '
+      + nf(cov.no_relative)+' with no relative name, '+nf(cov.no_name)+' with no name';
+    const rows = (list, codeLabel) => list.length
+      ? '<thead><tr><th>code</th><th>'+codeLabel+'</th><th class="num">rows</th>'
+        + '<th class="num">mapped</th></tr></thead><tbody>'
+        + list.map((r)=>'<tr><td><code>'+esc(r.code ?? '—')+'</code></td><td>'+esc(r.label ?? '')+'</td>'
+            +'<td class="num">'+nf(r.n)+'</td><td class="num">'+nf(r.mapped)+'</td></tr>').join('')
+        + '</tbody>'
+      : '<tbody><tr><td class="small muted">no rows in scope</td></tr></tbody>';
+    $('bdRel').innerHTML = rows(b.relation || [], 'relation');
+    $('bdGen').innerHTML = rows(b.gender || [], 'gender');
+  } catch(e){ $('bdNote').innerHTML = '<span class="bad">'+esc(e.message)+'</span>'; }
+}
+
+$('dState').onchange = async () => {
+  $('dAc').value = '';
+  await loadAcSelect('dAc', $('dState').value || null, 'any AC');
+};
+$('dLoad').onclick = () => { loadElectors(); tickBreakdown(); };
+for (const id of ['dPart','dCurPart','dEpic','dName']){
+  $(id).onkeydown = (e) => { if(e.key==='Enter') $('dLoad').click(); };
+}
+
+/* ==================================================================== EPIC */
+
+function epicRowHtml(r){
+  if(!r) return '<div class="small muted">not in the cache</div>';
+  const kv = [
+    ['EPIC', '<code>'+esc(r.epic)+'</code>'],
+    ['found', r.found ? '<span class="ok">yes</span>' : '<span class="warn">no record</span>'],
+    ['http', esc(r.http_status ?? '—')], ['hits', nf(r.hits)],
+    ['name', esc(r.name || '—')], ['local name', esc(r.name_local || '—')],
+    ['relation', esc([r.relation, r.relation_local, r.relation_type].filter(Boolean).join(' / ') || '—')],
+    ['age', nf(r.age)], ['gender', esc(r.gender || '—')],
+    ['state', esc([r.state_cd, r.state_name].filter(Boolean).join(' · ') || '—')],
+    ['district', esc(r.district || '—')],
+    ['AC', esc([r.ac_no, r.ac_name].filter(Boolean).join(' · ') || '—')],
+    ['part', esc([r.part_no, r.part_name, r.part_name_l1].filter(Boolean).join(' · ') || '—')],
+    ['serial / section', nf(r.serial_no)+' / '+nf(r.section_no)],
+    ['polling station', esc([r.ps_building, r.ps_building_l1].filter(Boolean).join(' · ') || '—')],
+    ['looked up', ago(r.fetched_at)],
+  ];
+  return '<div class="grid">'+kv.map(([k,v]) =>
+      '<div><div class="k">'+k+'</div><div class="small">'+v+'</div></div>').join('')+'</div>';
+}
+
+async function loadEpics(){
+  try {
+    const rows = await api('/api/epics?limit=50');
+    $('epicTable').innerHTML = '<thead><tr><th>EPIC</th><th>found</th><th>http</th><th>name</th>'
+      + '<th>AC</th><th>part</th><th class="num">sl</th><th>looked up</th></tr></thead><tbody>'
+      + rows.map((r)=>'<tr class="click" data-epic="'+esc(r.epic)+'"><td><code>'+esc(r.epic)+'</code></td>'
+          +'<td>'+(r.found?'<span class="ok">yes</span>':'<span class="warn">no</span>')+'</td>'
+          +'<td>'+esc(r.http_status ?? '')+'</td><td>'+esc(r.name||'')+'</td>'
+          +'<td class="small muted">'+esc([r.ac_name, r.part_no].filter(Boolean).join(' · '))+'</td>'
+          +'<td class="small muted">'+esc(r.part_name||'')+'</td>'
+          +'<td class="num">'+nf(r.serial_no)+'</td>'
+          +'<td class="small muted">'+ago(r.fetched_at)+'</td></tr>').join('')
+      + '</tbody>';
+    $('epicTable').querySelectorAll('tr[data-epic]').forEach((tr)=>{
+      tr.onclick = () => { $('epicInput').value = tr.dataset.epic; runEpic(); };
+    });
+  } catch(e){ $('epicTable').innerHTML = '<tbody><tr><td class="bad">'+esc(e.message)+'</td></tr></tbody>'; }
+}
+
+async function runEpic(){
+  const epic = $('epicInput').value.trim();
+  if(!epic) return;
+  $('epicResult').innerHTML = '<div class="small muted">looking up '+esc(epic)+'…</div>';
+  try {
+    const r = await post('/api/epic', { epic, refresh: $('epicRefresh').checked });
+    $('epicResult').innerHTML = '<div class="k">'
+      + (r.cached ? 'from the shared cache — the national display was not asked' : 'just fetched and cached for every device')
+      + '</div>'+epicRowHtml(r.row);
+    loadEpics();
+  } catch(e){
+    $('epicResult').innerHTML = '<div class="banner bad">'+esc(e.message)+'</div>';
+  }
+}
+
+$('epicGo').onclick = runEpic;
+$('epicInput').onkeydown = (e) => { if(e.key==='Enter') runEpic(); };
+
+/* ==================================================================== logs */
+
+async function tickJobs(){
+  const qs = new URLSearchParams({ limit:'60' });
+  if($('jobStatus').value) qs.set('status', $('jobStatus').value);
+  try {
+    const rows = await api('/api/jobs?'+qs.toString());
+    $('jobsMsg').textContent = rows.length+' job(s)';
+    $('jobsTable').innerHTML = '<thead><tr><th class="num">id</th><th>kind</th><th>status</th>'
+      + '<th>mode</th><th>device</th><th>progress</th><th>result / error</th><th>created</th>'
+      + '<th>started</th><th>finished</th><th></th></tr></thead><tbody>'
+      + rows.map((j)=>'<tr><td class="num">'+j.id+'</td><td><code>'+esc(j.kind)+'</code></td>'
+          +'<td>'+statusPill(j.status)+'</td><td class="small muted">'+esc(j.mode||'')+'</td>'
+          +'<td class="small muted">'+esc(j.device||'')+'</td>'
+          +'<td class="small muted">'+esc(JSON.stringify(j.progress||{}).slice(0,90))+'</td>'
+          +'<td class="small">'+(j.error ? '<span class="bad">'+esc(String(j.error).slice(0,90))+'</span>'
+              : esc(JSON.stringify(j.result||{}).slice(0,90)))+'</td>'
+          +'<td class="small muted">'+ago(j.created_at)+'</td>'
+          +'<td class="small muted">'+ago(j.started_at)+'</td>'
+          +'<td class="small muted">'+ago(j.finished_at)+'</td>'
+          +'<td>'+((j.status==='queued'||j.status==='running')
+              ? '<button class="ghost small" data-cancel="'+j.id+'">cancel</button>' : '')+'</td></tr>').join('')
+      + '</tbody>';
+    $('jobsTable').querySelectorAll('button[data-cancel]').forEach((b)=>{
+      b.onclick = async () => {
+        b.disabled = true;
+        try {
+          const r = await post('/api/jobs/'+b.dataset.cancel+'/cancel');
+          notice(r.cancelled ? 'Cancelled job #'+esc(b.dataset.cancel)+'.'
+            : 'Job #'+esc(b.dataset.cancel)+' is no longer queued or running.', r.cancelled?'ok':'warn');
+          tickJobs();
+        } catch(e){ notice('Cancel failed: '+esc(e.message), 'bad'); }
+        finally { b.disabled = false; }
+      };
+    });
+  } catch(e){ $('jobsMsg').innerHTML = '<span class="bad">'+esc(e.message)+'</span>'; }
+}
+
+async function tickEvents(){
+  try {
+    const rows = await api('/api/events?all=1&limit=200');
+    $('eventsTable').innerHTML = '<thead><tr><th class="num">id</th><th>when</th><th>level</th>'
+      + '<th>source</th><th>device</th><th>message</th></tr></thead><tbody>'
+      + rows.map((e)=>'<tr><td class="num">'+e.id+'</td><td class="small muted">'+ago(e.ts)+'</td>'
+          +'<td>'+(e.level==='error'||e.level==='warn'
+              ? '<span class="'+(e.level==='error'?'bad':'warn')+'">'+esc(e.level)+'</span>'
+              : esc(e.level))+'</td>'
+          +'<td class="small muted">'+esc(e.source||'')+'</td>'
+          +'<td class="small muted">'+esc(e.device||'')+'</td>'
+          +'<td class="small">'+esc(String(e.message||'').slice(0,300))+'</td></tr>').join('')
+      + '</tbody>';
+  } catch(e){ $('eventsTable').innerHTML = '<tbody><tr><td class="bad">'+esc(e.message)+'</td></tr></tbody>'; }
+}
+
+$('btnJobsRefresh').onclick = () => { tickJobs(); tickEvents(); };
+$('jobStatus').onchange = tickJobs;
+
+/* --------------------------------------------------------------- boot */
+(async () => {
+  try {
+    const s = await api('/api/summary');
+    $('hdr').textContent = 'device '+s.device;
+  } catch { /* the pages below report their own errors */ }
+  renderCatalog();
+  loadActionSelectors().catch(()=>{});
+  tickJob();
+  // The two tab-scoped pickers are filled once at boot so switching tabs is
+  // instant; each keeps whatever the operator chose.
+  api('/api/states').then((rows)=>{
+    const opts = (blank) => '<option value="">'+blank+'</option>'
+      + rows.map((r)=>'<option value="'+esc(r.state_cd)+'">'+esc(r.state_cd)+' · '+esc(r.name||'')+'</option>').join('');
+    $('pState').innerHTML = opts('pick a state…');
+    $('dState').innerHTML = opts('any state');
+    $('dAc').innerHTML = '<option value="">any AC</option>';
+  }).catch(()=>{});
+})();
+</script></body></html>

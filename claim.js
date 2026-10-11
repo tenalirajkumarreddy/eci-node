@@ -15,6 +15,7 @@
 // (state_cd, ac_no, part_no), and every claim is an upsert on that key.
 import { q, q1 } from './db.js';
 import { config } from './config.js';
+import { sharedStats } from './stats.js';
 
 // ---------------------------------------------------------------- settings
 //
@@ -298,25 +299,23 @@ export async function requeueStale(min) {
 // count(distinct cur_epic) over electors), and it grows with the table. app.py
 // made exactly this change for exactly this reason.
 
-let heavy = { at: 0, value: { electors: null, unique_epics: null }, inflight: null };
-
-/** Exact-but-expensive electors counters, refreshed in the background.
- * Never blocks a request: callers get the last value (null until the first
- * refresh lands) and the single-flight guard keeps one query in the air. */
-export function heavyCounts() {
-  const fresh = heavy.at > 0 && Date.now() - heavy.at < config.heavyTtlMs;
-  if (!fresh && !heavy.inflight) {
-    heavy.inflight = (async () => {
-      const electors = (await q1('select count(*)::int as c from electors'))?.c ?? null;
-      const uniq = (await q1(
-        `select count(distinct cur_epic)::int as c from electors
-          where cur_epic is not null and cur_epic <> ''`))?.c ?? null;
-      heavy = { at: Date.now(), value: { electors, unique_epics: uniq }, inflight: null };
-    })().catch(() => { heavy.inflight = null; });
-  }
+/** Exact-but-expensive electors counters.
+ *
+ * These are the two full scans of the 8 GB `electors` table. They are NOT run
+ * here any more: this process ran them every `heavyTtlMs` like every other
+ * instance, and on the live store four of those scans ran concurrently for 7+
+ * minutes each and never finished. One process at a time now refreshes them and
+ * publishes the value to a shared `settings` row, so every dashboard shows the
+ * same exact number with its age (see stats.js). Still never blocks a request:
+ * callers get the last published value, null until the first refresh lands. */
+export async function heavyCounts() {
+  const s = await sharedStats();
   return {
-    ...heavy.value,
-    heavy_age_secs: heavy.at ? Math.round((Date.now() - heavy.at) / 1000) : null,
+    electors: s.electors,
+    unique_epics: s.unique_epics,
+    heavy_age_secs: s.age_secs,
+    heavy_refreshing: !!s.refreshing,
+    heavy_source: s.updated_by ?? null,
   };
 }
 
@@ -331,13 +330,12 @@ export async function overallCounts() {
            coalesce(sum(records),0)::int                   as records,
            coalesce(sum(epics),0)::int                     as epics
       from old_parts`);
-  const slow = heavyCounts();
   const overall = {
     ...p,
     states: (await q1('select count(*)::int as c from states'))?.c ?? 0,
     acs: (await q1('select count(*)::int as c from acs'))?.c ?? 0,
     epic_lookups: (await q1('select count(*)::int as c from epic_lookups'))?.c ?? null,
-    ...slow,
+    ...(await heavyCounts()),
   };
   // Free = unprocessed, unclaimed AND unreserved. A live hold belongs to a
   // device's next few sweeps, so it is not free either - what is left is

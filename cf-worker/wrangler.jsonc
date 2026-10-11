@@ -1,0 +1,27 @@
+{
+  // Cloudflare Worker that serves the ECI panel by proxying to the local agent.
+  // `npx wrangler dev`    — run it locally against a local D1 (no account needed)
+  // `npx wrangler deploy` — deploy with your own account (the MCP path is used
+  //                          by default; see README.md)
+  "name": "eci-node",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-10",
+  "observability": { "enabled": true },
+  // The rendezvous between a panel request and the agent's long-poll. SQLite-
+  // backed (no storage is used) so it works on the Workers free plan.
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "PanelHub" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PanelHub"] }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "eci-panel-mailbox",
+      // Created through the Cloudflare API (MCP); the same database is used in
+      // production. `wrangler dev` ignores it and uses a local SQLite copy.
+      "database_id": "f98a5613-e0da-443f-b6d5-7c3e7112262d"
+    }
+  ]
+}

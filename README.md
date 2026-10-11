@@ -40,21 +40,91 @@ Multi-device note: the fleet cap was empirically per-source (~80 req/s). Phones
 behind one NAT may share a budget. AIMD per device handles this automatically —
 each device converges to its share.
 
+## Catalog & fleet admin panel (`/admin`)
+
+The device dashboard at `/` is a *monitor for this process*. `/admin` is the
+operator's view of the whole thing: real rows, the buttons that add work, and the
+numbers that say whether adding another device is worth it. Same process, same
+port, no extra service and no new dependency.
+
+**Catalog** — states → ACs → parts → electors, drilled down by clicking. Every
+list is one pass with no per-row subqueries, which is what keeps it usable on a
+live store: the states page measures ~0.3s (the obvious three-way join fans out
+to 6.8M rows and took 137s), and the parts page shows `old_parts.records` instead
+of counting `electors` per part. Elector search takes either an **EPIC / source
+id** (exact index lookup, ~0.2s) or a **name prefix** — never `%name%`, which
+cannot use `electors_name_idx` and scans the whole table when nothing matches.
+
+**Actions** — the catalogue work the Python web app used to do:
+
+| button | what it writes |
+|---|---|
+| Seed states | legacy catalogue DB + the live state list (upsert, nothing deleted) |
+| Seed ACs | legacy catalogue merged with the live list, one batched write |
+| Discover next | claims the next undiscovered AC and probes its part numbers |
+| Requeue errored | puts failed ACs back in the queue after you fix the cause |
+
+Discovery is a **queue over `acs.discover_status`**: one atomic `UPDATE` claims the
+next AC, so several instances can discover in parallel with no lock, a crash is
+reaped after `ECI_DISCOVER_STALE_MIN`, and a restart resumes where it stopped.
+Part numbers are probed in chunks while the top of each chunk answers, so
+`ECI_DISCOVER_HARD_CAP` is a ceiling and the reported `truncated` flag means the
+cap was actually reached.
+
+Same actions from the CLI, for cron or a machine with no browser:
+
+```
+node index.js --status
+node index.js --seed-states
+node index.js --seed-acs [S01]
+node index.js --discover-next [S01] [--batch 10]
+node index.js --discover S01/1          # one AC
+node index.js --acs-backlog
+node index.js --no-collect --port 8008  # serve the panel without sweeping
+```
+
+**Fleet health** answers "how many more devices can I add?" from measurements:
+per-device req/s and AIMD limit, the **429/5xx mix** (invisible in the database
+before this), parts/hour, the queue and an ETA, and the **egress IP** each device
+reports — because a provider hands every service in a region the same outbound
+ranges, so several instances can be competing for one per-IP ceiling. The page
+says so when it sees it instead of assuming.
+
+Each worker publishes its own numbers to `worker_heartbeat@<tag>` in `settings`
+(the same key the Python and Android clients use), so a device running an older
+build still appears in the table — it just has fewer fields filled in.
+
+## The expensive counters are shared, not repeated
+
+`count(*) from electors` and `count(distinct cur_epic)` are full scans (8 GB /
+22M rows on the live store). Refreshing them per instance every 120s is a
+stampede: four of those scans ran concurrently for 7+ minutes each and never
+finished, because nothing sets `statement_timeout` and the server's value is `0`.
+They are now computed by **one process at a time** — claimed with a single atomic
+statement against a shared `settings` row — and every dashboard reads that row,
+so all instances show the same exact number with its age (never an estimate
+beside an exact value). The scan itself runs with `set statement_timeout`.
+
 ## Layout
+
+Paths are relative to this directory.
 
 | file | role |
 |---|---|
-| `src/config.js` | env config; device tag; no caps |
-| `src/db.js` | `pg` pool, `q()`, `logEvent()` |
-| `src/schema.js` | DDL + skip-if-complete (no ACCESS EXCLUSIVE on live DBs) |
-| `src/aimd.js` | congestion controller (the "no cap" piece) |
-| `src/api.js` | gateway client: keep-alive fetch, timeout, 404-as-empty |
-| `src/claim.js` | atomic claim / reserve / take / complete / stale reaper |
-| `src/collector.js` | part sweep, serial iteration, batched upserts |
-| `src/worker.js` | auto loop, reservations, crash recovery |
-| `src/epic.js` | EPIC processor (national search, passKey = SHA512(APP_CONST+key)) |
-| `src/server.js` | zero-dep HTTP dashboard + JSON API |
-| `src/index.js` | CLI entry |
+| `config.js` | env config; device tag; no caps |
+| `db.js` | `pg` pool, `q()`, `logEvent()`, `geoQ()`, `dbHealth()` |
+| `schema.js` | DDL + skip-if-complete (no ACCESS EXCLUSIVE on live DBs) |
+| `aimd.js` | congestion controller (the "no cap" piece) |
+| `api.js` | gateway client: sweeps, EPIC search, live state/AC lists |
+| `claim.js` | atomic claim / reserve / take / complete / stale reaper |
+| `collector.js` | part sweep, serial iteration, batched upserts |
+| `worker.js` | auto loop, reservations, crash recovery, heartbeat |
+| `catalog.js` | seed states/ACs + the discover-parts queue (`/admin` actions) |
+| `stats.js` | the two exact counters over `electors`: one scanner, shared result |
+| `server.js` | zero-dep HTTP dashboard + JSON API + `/admin` |
+| `admin.html` | the catalog / actions / fleet / database panel |
+| `epic.js` | EPIC processor (national search, passKey = SHA512(APP_CONST+key)) |
+| `index.js` | CLI entry |
 
 ## Data model
 

@@ -9,7 +9,7 @@ import { EciClient } from './api.js';
 import {
   bestPendingPart, claimPart, reserveParts, takeReserved, reserveCount,
   completePart, failPart, releasePart, requeueMine, requeueStale,
-  releaseReservations, getSetting,
+  releaseReservations, getSetting, setSetting,
 } from './claim.js';
 import { sweepPart } from './collector.js';
 
@@ -33,6 +33,105 @@ export class Worker {
     this.startedAt = Date.now();
     this.lastProgress = Date.now();
     this.reaper = null;
+    // Fleet health: this device's own numbers, published where the panel (and
+    // the Python/Android dashboards) read them - see startHeartbeat().
+    this.heartbeatTimer = null;
+    this.ipTimer = null;
+    this.egressIp = null;
+    this.egressAt = null;
+  }
+
+  /**
+   * Publish this device's health to the shared `settings` row, so the panel can
+   * answer "how many more devices can I add" from measurements rather than
+   * guesses: the controller's limit, the 429/5xx mix and the live req/s per
+   * device, plus the egress IP - the number that matters most, because Render
+   * shares its regional outbound ranges across services, so several instances
+   * can be competing for one per-IP gateway ceiling.
+   *
+   * Same key shape the Python and Android clients use (`worker_heartbeat@<tag>`),
+   * so every device shows up in the same fleet view. One small upsert every
+   * `heartbeatMs`; failures are swallowed because a metrics write must never be
+   * the reason a sweep dies.
+   */
+  startHeartbeat() {
+    if (this.heartbeatTimer) return;
+    const beat = () => { this._beat().catch(() => {}); };
+    beat();
+    this.heartbeatTimer = setInterval(beat, config.heartbeatMs);
+    this.heartbeatTimer.unref?.();
+    if (config.reportIp) {
+      // Once at startup, then hourly: enough to prove whether devices share an
+      // egress IP, cheap enough to be irrelevant.
+      this._refreshEgressIp().catch(() => {});
+      this.ipTimer = setInterval(() => { this._refreshEgressIp().catch(() => {}); }, 3_600_000);
+      this.ipTimer.unref?.();
+    }
+  }
+
+  /** Final beat + stop publishing (called on shutdown). */
+  async stopHeartbeat() {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.ipTimer) clearInterval(this.ipTimer);
+    this.heartbeatTimer = null;
+    this.ipTimer = null;
+    this.running = false;
+    await this._beat(true).catch(() => {});
+  }
+
+  async _beat(final = false) {
+    const a = this.aimd.snapshot();
+    const c = this.current;
+    await setSetting(config.deviceTag, 'worker_heartbeat', {
+      at: Math.floor(Date.now() / 1000),
+      iso: new Date().toISOString(),
+      tag: config.deviceTag,
+      worker_id: config.workerId,
+      source: 'node',
+      running: !!this.running,
+      paused: !!this.stopFlag,
+      stopping: final,
+      parts_done: this.doneParts,
+      errors: this.errors,
+      uptime_s: Math.round((Date.now() - this.startedAt) / 1000),
+      current: c ? {
+        state_cd: c.state_cd, ac_no: c.ac_no, part_no: c.part_no, name: c.name ?? null,
+      } : null,
+      last_done: this.lastDone ? {
+        state_cd: this.lastDone.state_cd, ac_no: this.lastDone.ac_no,
+        part_no: this.lastDone.part_no, records: this.lastDone.records,
+        epics: this.lastDone.epics, roll_end: this.lastDone.roll_end,
+        seconds: this.lastDone.seconds, finished_at: this.lastDone.finished_at,
+      } : null,
+      aimd: {
+        limit: a.limit, inflight: a.inflight, peak: a.peak,
+        reqs: a.reqs, errReqs: a.errReqs,
+        // The mix is the point: 429s are the gateway's ceiling, 5xx are its
+        // trouble, and neither was visible in the database before this row.
+        byStatus: a.byStatus, errByStatus: a.errByStatus,
+        retryAfters: a.retryAfters, coolingForSec: a.coolingForSec,
+        recentReqPerSec: a.recentReqPerSec, windowAvgReqsPerSec: a.windowAvgReqsPerSec,
+      },
+      egress_ip: this.egressIp,
+      egress_at: this.egressAt,
+    });
+  }
+
+  /** Ask a neutral third party what this process's public IP is. */
+  async _refreshEgressIp() {
+    try {
+      const res = await fetch('https://api.ipify.org?format=json', {
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.status !== 200) return;
+      const body = await res.json().catch(() => null);
+      const ip = typeof body?.ip === 'string' ? body.ip : null;
+      if (ip && ip !== this.egressIp) {
+        this.egressIp = ip;
+        this.egressAt = new Date().toISOString();
+        await logEvent(config.deviceTag, 'info', `egress ip ${ip}`, 'node');
+      }
+    } catch { /* offline, blocked, or rate limited: not our problem */ }
   }
 
   /** Start (or resume) the auto loop. Safe to call again after pause(). */

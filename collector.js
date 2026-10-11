@@ -29,13 +29,31 @@ const int = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * Strip NUL bytes from a text value.
+ *
+ * PostgreSQL cannot store a NUL in a text column: it rejects the ENTIRE
+ * statement with `invalid byte sequence for encoding "UTF8": 0x00`. The
+ * old-roll route really does return them - measured 2026-10-10 on S04 AC 1,
+ * where parts 37-89 could never finish because a handful of records carry an
+ * EPIC like `"BR\u00001\u000001108103"` (hex 42 52 00 31 00 ...) in
+ * `epicNumber`. Because one bad row fails the whole ~200-row batch and a failed
+ * flush puts its rows back (never drops them), a single such record wedged the
+ * part for every device in the fleet. Clean it at this boundary instead.
+ *
+ * Only NULs are removed; every other byte is left exactly as the gateway sent
+ * it, so this cannot mask a different kind of bad data.
+ */
+const clean = (v) => (typeof v === 'string' && v.includes('\u0000') ? v.replace(/\u0000/g, '') : v);
+
 /** Best-effort readers over the gateway's 2003-vintage field names. The exact
  * names below are the ones measured live (`oldFullName`, `epicNumber`,
- * `bloMappedEpicNo`, ...); the extras are kept as fallbacks only. */
+ * `bloMappedEpicNo`, ...); the extras are kept as fallbacks only. Values are
+ * NUL-stripped here because this is the only door text takes into a write. */
 const pick = (o, keys) => {
   for (const k of keys) {
     const v = o?.[k];
-    if (v !== undefined && v !== null && v !== '') return v;
+    if (v !== undefined && v !== null && v !== '') return clean(v);
   }
   return null;
 };
@@ -54,7 +72,7 @@ export function extractRows(body) {
 /** One API record -> one electors row (same columns worker.py writes). */
 export function mapRecord(raw, stateCd, acNo, partNo, serialFallback) {
   return [
-    raw.id ?? `${stateCd}:${acNo}:${partNo}:${serialFallback}`,   // source_id
+    clean(raw.id) ?? `${stateCd}:${acNo}:${partNo}:${serialFallback}`,   // source_id
     stateCd, acNo, partNo,
     int(pick(raw, ['oldPartSerialNo', 'partSerialNumber', 'serialNo']) ?? serialFallback),
     pick(raw, ['oldFullName', 'firstName', 'fullName']),
@@ -121,8 +139,15 @@ function flushBatch(batch) {
   const t0 = Date.now();
   writeState.buffered = batch.length;
   writeState.inflight += 1;
-  flushChain = flushChain
-    .then(() => q(text, vals))
+  // Serialise this attempt behind the previous one, but never let a failure
+  // poison the chain: only the caller of THIS flush may see the error. Assigning
+  // the rejected promise to `flushChain` (which is what this did) meant every
+  // later flush skipped its own SQL entirely and replayed the first error
+  // forever - measured on render-3 as 3,296 "failed batches", the last successful
+  // commit 8672s earlier, and a buffered count that could never drain. A single
+  // bad batch silently killed that device's write path for the rest of its life.
+  const attempt = flushChain.then(() => q(text, vals));
+  const tracked = attempt
     .then(() => {
       writeState.flushed += items.length;
       writeState.flushes += 1;
@@ -140,7 +165,9 @@ function flushBatch(batch) {
       writeState.inflight -= 1;
       writeState.buffered = batch.length;
     });
-  return flushChain;
+  // The stored chain always settles, so the next flush runs its own statement.
+  flushChain = tracked.then(() => {}, () => {});
+  return tracked;
 }
 
 /**
@@ -186,11 +213,13 @@ export async function probeRollEnd(client, part, hardCap = config.serialCap) {
 }
 
 export function metaFrom(raw) {
+  // NUL-stripped too: these four land in old_parts (the pre-sweep publish and
+  // every heartbeat), so a NUL here fails those statements instead of the batch.
   return {
-    old_state_name: raw.oldStateName ?? null,
-    old_dist_no: raw.oldDistNo ? String(raw.oldDistNo) : null,
-    old_dist_name: raw.oldDistName ?? null,
-    old_ac_name: raw.oldAcName ?? null,
+    old_state_name: clean(raw.oldStateName) ?? null,
+    old_dist_no: raw.oldDistNo ? clean(String(raw.oldDistNo)) : null,
+    old_dist_name: clean(raw.oldDistName) ?? null,
+    old_ac_name: clean(raw.oldAcName) ?? null,
   };
 }
 

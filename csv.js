@@ -24,11 +24,17 @@ export function toCsvRow(values) {
 
 /**
  * Stream `electors` as CSV into any writable stream.
- * `{state, ac}` are optional filters; like the Python route the export is
- * EPIC-only (rows whose current mapping has an EPIC), so the file is a list of
- * people you can actually search for.
+ *
+ * `{state, ac, part, cur_part}` are the same optional filters the Python route
+ * took (old part, current-roll part), and like that route the export defaults to
+ * EPIC-only - rows whose current mapping has an EPIC - so the file is a list of
+ * people you can actually search for. `epics_only: false` exports every row of the
+ * selection instead.
  */
-export async function writeElectorsCsv(stream, { state = null, ac = null } = {}) {
+export async function writeElectorsCsv(stream, {
+  state = null, ac = null, part = null, cur_part = null, epics_only = true,
+} = {}) {
+  const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
   const rows = await q(
     `select cur_epic, full_name, full_name_l1, relative_name, relative_name_l1,
             relation_type, gender, age_snapshot, epic_2003, serial_no, part_no,
@@ -36,9 +42,11 @@ export async function writeElectorsCsv(stream, { state = null, ac = null } = {})
        from electors
       where ($1::text is null or state_cd = $1)
         and ($2::int  is null or ac_no = $2)
-        and cur_epic is not null and cur_epic <> ''
+        and ($3::int  is null or part_no = $3)
+        and ($4::int  is null or cur_part_no = $4)
+        and ($5::boolean is not true or (cur_epic is not null and cur_epic <> ''))
       order by cur_ac_no, cur_part_no, cur_epic`,
-    [state, ac === null || ac === '' ? null : Number(ac)],
+    [state, num(ac), num(part), num(cur_part), !!epics_only],
   );
 
   // BOM first: without it Excel renders the Devanagari columns as mojibake.

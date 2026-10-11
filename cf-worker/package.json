@@ -1,0 +1,15 @@
+{
+  "name": "eci-cf-worker",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that serves the ECI collector panel by proxying to the local agent.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute DB --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute DB --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.42.0"
+  }
+}
